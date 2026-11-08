@@ -222,4 +222,4 @@ cd tests\js && npm install && npm test        :: 28 JS tests (extractors + graph
 
 ## Roadmap
 
-5. **Embeds** polish, resurfacing ("revisit" shelf), tray app + start at login, a 2-D map view of topics (the /api/clusters/map data is already there)
+5. **Embeds** polish, resurfacing ("revisit" shelf), auto-update for the Windows app, a 2-D map view of topics (the /api/clusters/map data is already there)

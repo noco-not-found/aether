@@ -25,6 +25,10 @@ from pathlib import Path
 if not getattr(sys, "frozen", False):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# numpy's OpenBLAS reserves ~32 MB per CPU thread at import (540 MB on a 16-thread laptop) for maths this app
+# barely uses: two threads keep the always-on engine at ~90 MB. Must be set before numpy is imported.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+
 from engine import desktop  # noqa: E402
 from engine.config import FROZEN, HOST, Paths, default_port, default_root  # noqa: E402
 
