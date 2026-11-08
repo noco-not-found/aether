@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <section id="setup" hidden>
+    <h1>Connect to Aether</h1>
+    <p>Start the engine (<code>run.bat</code>), open the Aether UI, click <b>Extension setup</b>, and paste the token here once.</p>
+    <input id="token" placeholder="Token" autocomplete="off" spellcheck="false">
+    <input id="port" placeholder="Port" value="47821" inputmode="numeric">
+    <button id="saveCfg">Connect</button>
+    <div id="cfgMsg" class="msg"></div>
+  </section>
+
+  <section id="main" hidden>
+    <div class="status"><span id="dot" class="dot"></span><span id="statusText">Checking engine…</span><span id="queued"></span><button id="cfgBtn" class="link">settings</button></div>
+
+    <div class="preview">
+      <div class="pcol">
+        <span id="source" class="badge"></span>
+        <input id="title" aria-label="Title">
+        <div id="sub" class="sub"></div>
+      </div>
+    </div>
+
+    <div id="imgs" hidden>
+      <div class="imghead"><span>Images</span><span id="imgCount" class="count"></span></div>
+      <div id="imgGrid" class="imggrid" role="group" aria-label="Pick the images to save"></div>
+    </div>
+    <div id="textInfo" class="info"></div>
+
+    <div id="chips" class="chips"></div>
+    <input id="tagInput" list="tagOptions" placeholder="Add tags, press Enter" autocomplete="off">
+    <datalist id="tagOptions"></datalist>
+
+    <textarea id="note" placeholder="Note (optional)"></textarea>
+    <label class="check"><input type="checkbox" id="shot"> Also save a screenshot</label>
+    <button id="save">Save to Aether</button>
+    <div id="msg" class="msg" role="status"></div>
+  </section>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

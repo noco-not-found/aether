@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="aether-token" content="__AETHER_TOKEN__">
+  <meta name="aether-port" content="__AETHER_PORT__">
+  <title>Aether</title>
+  <!-- picks light/dark before the first paint, so there is no flash -->
+  <script src="/ui/theme.js"></script>
+  <link rel="icon" href="/ui/icon.png">
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">Aether</div>
+    <input id="search" type="search" placeholder="Search, or type #tag to filter by tag   ( / )" autocomplete="off" spellcheck="false" aria-controls="tagSug">
+    <div id="tagSug" class="tagsug" role="listbox" aria-label="Matching tags" hidden></div>
+    <div class="seg" role="group" aria-label="View">
+      <button id="viewGrid" class="ghost toggle" aria-pressed="true" title="Cards (G)">Grid</button><button id="viewGraph" class="ghost toggle" aria-pressed="false" title="Network of related items (V)">Graph</button>
+    </div>
+    <button id="meaningBtn" class="ghost toggle" aria-pressed="false" title="Search by meaning: finds pictures and texts about the idea, not just the words (M)">Meaning</button>
+    <div id="count" class="muted"></div>
+    <button id="themeBtn" class="ghost" title="Theme: follow Windows, light or dark (T)"></button>
+    <button id="refreshBtn" class="ghost" title="Reload the library (R)"><span class="ico" aria-hidden="true">&#8635;</span><span id="refreshLabel">Refresh</span></button>
+    <button id="setupBtn" class="ghost" title="Extension setup">Extension setup</button>
+  </header>
+
+  <div class="layout">
+    <aside class="side">
+      <section>
+        <h3>Sources</h3>
+        <div id="sources" class="facet"></div>
+      </section>
+      <section id="topicsSec">
+        <h3>Topics <button id="regroup" class="mini ghost" title="Group the library again">Regroup</button></h3>
+        <div id="topicState" class="muted small"></div>
+        <label class="mix small muted" title="What topics are built from: how pictures look, or what the text says">
+          <span>Text</span><input id="visualMix" type="range" min="0" max="1" step="0.1" value="0.5"><span>Looks</span>
+        </label>
+        <div id="topics" class="facet"></div>
+      </section>
+      <section>
+        <h3>Tags</h3>
+        <div id="tags" class="facet"></div>
+      </section>
+    </aside>
+
+    <main>
+      <div id="semBanner" class="banner" hidden></div>
+      <div id="active" class="active-filters"></div>
+      <div id="empty" class="empty" hidden></div>
+      <div id="grid" class="grid"></div>
+      <section id="graphBox" hidden>
+        <div class="gbar small">
+          <div class="gpreset" role="group" aria-label="Presets">
+            <select id="gPreset" aria-label="Graph preset" title="Saved graph setups"><option value="">Custom</option></select>
+            <button id="gPresetSave" class="mini ghost" title="Save the current setup under a name">Save as</button>
+            <button id="gPresetDel" class="mini ghost" title="Delete the selected preset" disabled>Delete</button>
+          </div>
+
+          <details class="gmenu" id="mLinks">
+            <summary>Links</summary>
+            <div class="gpop">
+              <label class="grow"><input id="gSim" type="checkbox" checked> Similarity links</label>
+              <label class="grow" title="How many of its closest matches each item links to">Links per item <input id="gK" type="range" min="1" max="8" step="1" value="4"> <b id="gKv">4</b></label>
+              <label class="grow" title="How much a match has to stand out before it becomes a link">Loose <input id="gZ" type="range" min="1" max="6" step="0.5" value="3"> Strict</label>
+              <label class="grow" title="What links are built from: what the text says, or how pictures look">Text <input id="gMix" type="range" min="0" max="1" step="0.1" value="0.5"> Looks</label>
+              <hr>
+              <label class="grow" title="One-way links you drew yourself (double-click an item, then Link)"><input id="gMan" type="checkbox" checked> My links <span class="muted">(arrows)</span></label>
+              <hr>
+              <label class="grow"><input id="gTags" type="checkbox" checked> Tag links <span class="muted">(dashed)</span></label>
+              <div class="muted small">Tags that make links <button id="gTagAll" class="mini ghost">All</button><button id="gTagNone" class="mini ghost">None</button></div>
+              <div id="gTagList" class="gtaglist"></div>
+            </div>
+          </details>
+
+          <details class="gmenu" id="mLook">
+            <summary>Look</summary>
+            <div class="gpop">
+              <label class="grow">Dot size <select id="gSize"><option value="degree">By connections</option><option value="same">All the same</option><option value="recent">Newer is bigger</option></select></label>
+              <label class="grow">Colour <select id="gColor"><option value="topic">By topic</option><option value="source">By source</option><option value="type">By type</option></select></label>
+              <label class="grow">Titles <select id="gLabels"><option value="auto">Auto</option><option value="hubs">Hubs only</option><option value="off">Off</option></select></label>
+              <label class="grow">Pictures <select id="gThumbs"><option value="zoom">When zoomed in</option><option value="always">Always</option><option value="never">Never</option></select></label>
+              <label class="grow">Link strength <input id="gEdge" type="range" min="0.2" max="2" step="0.1" value="1"></label>
+              <button id="gLookReset" class="mini ghost">Reset look</button>
+            </div>
+          </details>
+
+          <details class="gmenu" id="mFocus">
+            <summary>Focus</summary>
+            <div class="gpop">
+              <div class="muted small">Shift-click an item (or use Focus in its drawer) to show only what is near it.</div>
+              <label class="grow">Reach <select id="gHops"><option value="1">1 step</option><option value="2">2 steps</option><option value="3">3 steps</option></select></label>
+              <button id="gFocusClear" class="mini ghost" disabled>Show everything</button>
+              <hr>
+              <label class="grow">Highlight <select id="gHl"><option value="">Nothing</option></select></label>
+              <hr>
+              <button id="gPath" class="mini ghost" title="Click two items; the shortest chain of links between them lights up">Find a path between two items</button>
+            </div>
+          </details>
+
+          <button id="gFit" class="mini ghost" title="Show everything (double-click the background)">Fit</button>
+          <button id="gUnpin" class="mini ghost" title="Release dots you dragged">Unpin all</button>
+          <span id="gInfo" class="muted"></span>
+        </div>
+        <div id="gStatus" class="gstatus small" hidden></div>
+        <div class="gwin">
+        <div class="gtitle">Graph</div>
+        <div id="graphWrap" class="graphwrap">
+          <canvas aria-label="Network of saved items"></canvas>
+          <div class="gtip" hidden></div>
+          <details id="gLegend" class="glegend small"></details>
+          <div id="gCtx" class="gctx" role="menu" hidden></div>
+          <div class="ghint small muted">scroll to zoom · drag to pan or pin · click to open · double-click for actions</div>
+        </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="selbar" class="selbar" hidden>
+    <span id="selcount"></span>
+    <input id="seltag" list="taglist" placeholder="tag name" autocomplete="off">
+    <button id="seladd">Add tag</button>
+    <button id="selrem" class="ghost">Remove tag</button>
+    <button id="seldel" class="danger">Delete</button>
+    <button id="selclear" class="ghost">Clear</button>
+  </div>
+
+  <aside id="detail" class="detail" hidden></aside>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <datalist id="taglist"></datalist>
+
+  <dialog id="setup">
+    <h2>Connect the browser extension</h2>
+    <ol>
+      <li>Open <code>chrome://extensions</code>, enable <b>Developer mode</b>, click <b>Load unpacked</b> and pick the <code id="extPath">extension</code> folder.
+        <button id="openExt" class="ghost mini" hidden>Open this folder</button></li>
+      <li>Click the Aether icon, then paste this token once:</li>
+    </ol>
+    <div class="tokenrow"><code id="tokenBox"></code><button id="copyToken">Copy</button></div>
+    <p class="muted">The token never leaves this machine. It stops other websites from talking to your library.</p>
+    <div id="appOpts" hidden>
+      <h3>Aether app</h3>
+      <label class="grow"><input type="checkbox" id="optLogin"> Keep saving in the background and start with Windows</label>
+      <p class="muted small">With the window closed, a small background engine keeps running so the extension can still save.
+        Reading text in images, meaning search and topics wait until you open Aether again.</p>
+      <div class="approw"><button id="openData" class="ghost">Open data folder</button><button id="quitApp" class="danger">Quit Aether</button>
+        <span id="appVer" class="muted small"></span></div>
+    </div>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
+
+  <script src="/ui/graphsim.js"></script>
+  <script src="/ui/graph.js"></script>
+  <script src="/ui/app.js"></script>
+</body>
+</html>

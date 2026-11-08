@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Aether Capture",
+  "version": "0.2.0",
+  "description": "Save the current page, post, image or video to your local Aether library.",
+  "action": { "default_popup": "popup.html", "default_title": "Save to Aether (Alt+Shift+S)" },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["activeTab", "scripting", "storage", "alarms", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "commands": {
+    "_execute_action": { "suggested_key": { "default": "Alt+Shift+S" }, "description": "Save this page to Aether" }
+  }
+}
