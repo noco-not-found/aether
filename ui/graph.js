@@ -6,6 +6,7 @@
            drag a node = move and pin it     double-click background = fit
            click = open the item (after a short wait, so a double-click isn't also a click)
            double-click / right-click a node = its menu (handlers.menu)
+           drag a picture's corner = resize that picture (handlers.resized(id, scale) to remember it)
            right-click a link = the link's menu (handlers.linkMenu)
            shift-click = focus on its neighbourhood
    Link mode (startLink): the source node shakes; clicking another node calls handlers.link(src, dst),
@@ -17,7 +18,9 @@
    drawn, so nodes don't jump around when you flip a switch. */
 (function (root) {
   const MAX_THUMBS = 160, IMG_CACHE = 500;
-  const DEFAULTS = { size: "degree", color: "topic", labels: "auto", thumbs: "zoom", edgeAlpha: 1, simOn: true, tagOn: true, manOn: true };
+  const DEFAULTS = { size: "degree", color: "topic", labels: "auto", thumbs: "zoom", edgeAlpha: 1, imgSize: 1, simOn: true, tagOn: true, manOn: true };
+  const CORNER = 9;                 // px around a picture's corner that grab it for resizing
+  const MIN_SCALE = 0.4, MAX_SCALE = 8, MAX_SIDE = 640;
   const CLICK_WAIT = 240;           // ms a click waits to see whether it becomes a double-click
   const calm = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -35,6 +38,9 @@
       this.adj = []; this.deg = []; this.vl = []; this.out = []; this.inn = [];
       this.linkFrom = -1; this.mouse = null; this.clickT = 0; this.lineageSpec = null; this.lineage = null;
       this.goneIds = new Set(); this.gone = new Set();
+      this.sizes = new Map();          // item id -> its own picture scale (dragged by the corner)
+      this.rects = [];                 // pictures drawn last frame, in draw order: [i, x, y, side]
+      this.order = null;               // draw order: resized pictures last, so they sit on top
       this.imgs = new Map(); this.raf = 0; this.fitted = false; this.d = 1;
       this.readTheme();
       matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { this.readTheme(); this.kick(); });
@@ -79,6 +85,7 @@
       this.sim = root.AetherSim.create({ nodes: data.nodes, links });
       this.focus = keepFocus !== null && keepFocus !== undefined ? (this.byId.get(keepFocus) ?? -1) : -1;
       this.pathPick = []; this.path = null; this.hover = -1; this.fitted = false; this.hideTip();
+      this.order = null;
       this.linkFrom = -1; this.gone = new Set([...this.goneIds].map((id) => this.byId.get(id)).filter((i) => i !== undefined));
       this.refreshCategories();
       this.rebuild();
@@ -205,6 +212,10 @@
       if (this.gone.has(this.hover)) { this.hover = -1; this.hideTip(); }
       this.rebuild();
     }
+    /** Per-picture sizes, as {id: scale}. Resized pictures show at any zoom and sit on top. */
+    setSizes(obj) { this.sizes = new Map(Object.entries(obj || {}).map(([k, v]) => [Number(k), Number(v)])); this.order = null; this.kick(); }
+    resetSize(id) { this.sizes.delete(id); this.order = null; this.kick(); this.h.resized?.(id, null); }
+    hasSize(id) { return this.sizes.has(id); }
     isPinned(id) { const i = this.byId?.get(id); return i !== undefined && !!this.sim.nodes[i].pinned; }
     unpin(id) { const i = this.byId?.get(id); if (i !== undefined) { this.sim.nodes[i].pinned = false; this.sim.reheat(0.3); this.kick(); } }
     unpinAll() { for (const n of this.sim?.nodes || []) n.pinned = false; this.sim?.reheat(0.5); this.kick(); }
@@ -293,27 +304,35 @@
       }
 
       const thumbs = o.thumbs === "always" || (o.thumbs === "zoom" && cam.k >= 2.2);
+      if (!this.order) {
+        const own = (n) => this.sizes.has(this.data.nodes[n.i].id);
+        this.order = nodes.filter((n) => !own(n)).concat(nodes.filter(own).sort((a, b) => this.picScale(a) - this.picScale(b)));
+      }
       let drawn = 0;
-      for (const n of nodes) {
+      this.rects = [];
+      for (const n of this.order) {
         if (!this.shown(n.i)) continue;
         let [x, y] = this.toScreen(n);
         if (n.i === this.linkFrom && !calm()) { const t = performance.now() / 32; x += Math.sin(t) * 2.6; y += Math.cos(t * 1.3) * 1.2; }
         const r = this.radius(n);
-        if (x < -30 || y < -30 || x > W + 30 || y > H + 30) continue;
+        const meta = this.data.nodes[n.i], own = this.sizes.has(meta.id);
+        const s = own || thumbs ? this.picSide(n) : 0, pad = Math.max(30, s / 2);
+        if (x < -pad || y < -pad || x > W + pad || y > H + pad) continue;
         const f = this.fade(n.i);
         ctx.globalAlpha = f;
-        const meta = this.data.nodes[n.i];
         let showed = false;
-        if (thumbs && meta.thumb && drawn < MAX_THUMBS && f > 0.5) {
+        // a picture you resized always shows (unless pictures are off): it is a landmark you chose
+        if (meta.thumb && o.thumbs !== "never" && (own || (thumbs && drawn < MAX_THUMBS)) && (f > 0.5 || own)) {
           const img = this.image(meta.thumb);
           if (img?.complete && img.naturalWidth) {
-            const s = Math.max(26, r * 3.2);
             ctx.save(); ctx.beginPath(); ctx.rect(x - s / 2, y - s / 2, s, s); ctx.clip();
             const q = Math.min(img.naturalWidth, img.naturalHeight), sx = (img.naturalWidth - q) / 2, sy = (img.naturalHeight - q) / 2;
             ctx.drawImage(img, sx, sy, q, q, x - s / 2, y - s / 2, s, s); ctx.restore();
             ctx.lineWidth = 2; ctx.strokeStyle = this.col.ink; ctx.strokeRect(x - s / 2, y - s / 2, s, s);
             ctx.fillStyle = this.color(n.i); ctx.fillRect(x - s / 2, y + s / 2 - 4, s, 4);
-            showed = true; drawn++;
+            if (n.i === hv || this.drag?.resize === n.i) this.handles(x, y, s);
+            this.rects.push([n.i, x, y, s]);
+            showed = true; if (!own) drawn++;
           }
         }
         if (!showed) {
@@ -328,12 +347,35 @@
         if (meta.id === this.openId || n.i === hv || n.i === this.focus || picked || linking) {
           ctx.lineWidth = n.i === this.focus || picked || linking ? 3 : 2.5; ctx.strokeStyle = n.i === this.focus || picked || linking ? this.col.accent : this.col.text;
           if (linking) ctx.setLineDash([4, 3]);
-          const m = Math.round(r * 1.8) / 2 + 5; ctx.strokeRect(Math.round(x - m) + 0.5, Math.round(y - m) + 0.5, 2 * m, 2 * m);
+          const m = (showed ? s : Math.round(r * 1.8)) / 2 + 5;      // around the picture when one is drawn
+          ctx.strokeRect(Math.round(x - m) + 0.5, Math.round(y - m) + 0.5, 2 * m, 2 * m);
           ctx.setLineDash([]);
         }
       }
       ctx.globalAlpha = 1;
       this.drawLabels(W, H);
+    }
+
+    /** Picture side in screen px: node size x the Image size setting x this picture's own scale. */
+    picScale(n) { return this.sizes.get(this.data.nodes[n.i].id) ?? 1; }
+    picSide(n) { return Math.min(MAX_SIDE, Math.max(26, this.radius(n) * 3.2) * (this.o.imgSize || 1) * this.picScale(n)); }
+    /** Four inked corner squares: the "you can drag me" signal. */
+    handles(x, y, s) {
+      const { ctx } = this, h = 7;
+      for (const [cx, cy] of [[x - s / 2, y - s / 2], [x + s / 2, y - s / 2], [x - s / 2, y + s / 2], [x + s / 2, y + s / 2]]) {
+        ctx.fillStyle = this.col.face; ctx.fillRect(cx - h / 2 - 1, cy - h / 2 - 1, h + 2, h + 2);
+        ctx.fillStyle = this.col.ink; ctx.fillRect(cx - h / 2, cy - h / 2, h, h);
+      }
+    }
+    /** The picture corner under the pointer: { i, sx, sy } (sx/sy = which corner, -1 or 1) or null. Topmost first. */
+    corner(mx, my) {
+      for (let k = this.rects.length - 1; k >= 0; k--) {
+        const [i, x, y, s] = this.rects[k];
+        const sx = mx < x ? -1 : 1, sy = my < y ? -1 : 1;
+        if (Math.abs(mx - (x + sx * s / 2)) <= CORNER && Math.abs(my - (y + sy * s / 2)) <= CORNER) return { i, sx, sy };
+        if (Math.abs(mx - x) < s / 2 && Math.abs(my - y) < s / 2) return null;     // inside a picture on top: not a corner below it
+      }
+      return null;
     }
 
     /** A one-way link: a solid line that stops at the edge of the target square, then a solid head. */
@@ -374,7 +416,8 @@
         if (x < 0 || y < 0 || x > W || y > H) continue;
         const raw = this.data.nodes[n.i].title || "";
         const t = raw.length > 28 ? raw.slice(0, 27) + "…" : raw;
-        const w = ctx.measureText(t).width, ly = y + this.radius(n) + 13;
+        const pic = this.rects.find((r) => r[0] === n.i);
+        const w = ctx.measureText(t).width, ly = y + Math.max(this.radius(n), pic ? pic[3] / 2 + 2 : 0) + 13;
         const box = [x - w / 2 - 3, ly - 11, x + w / 2 + 3, ly + 3];
         if (!must && taken.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) continue;
         taken.push(box);
@@ -397,6 +440,10 @@
     // ------------------------------------------------------ interaction
     pick(mx, my) {
       if (!this.sim) return -1;
+      for (let k = this.rects.length - 1; k >= 0; k--) {
+        const [i, x, y, s] = this.rects[k];
+        if (Math.abs(mx - x) <= s / 2 + 2 && Math.abs(my - y) <= s / 2 + 2) return i;
+      }
       let best = -1, bd = 1e9;
       for (const n of this.sim.nodes) {
         if (!this.shown(n.i)) continue;
@@ -445,15 +492,33 @@
       }, { passive: false });
       cv.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;                        // right button: the menu, not a click or a drag
-        const [mx, my] = this.pos(e), i = this.pick(mx, my);
+        const [mx, my] = this.pos(e), c = this.linkFrom < 0 && !this.pathMode ? this.corner(mx, my) : null;
         cv.setPointerCapture(e.pointerId);
-        this.drag = { i, mx, my, cx: this.cam.x, cy: this.cam.y, moved: false, shift: e.shiftKey };
         this.hideTip();
+        if (c) {                                             // grabbed a picture corner: resize, don't move
+          const n = this.sim.nodes[c.i];
+          this.drag = { resize: c.i, i: c.i, mx, my, moved: false, base: this.picSide(n) / this.picScale(n) };
+          return;
+        }
+        const i = this.pick(mx, my);
+        this.drag = { i, mx, my, cx: this.cam.x, cy: this.cam.y, moved: false, shift: e.shiftKey };
       });
       cv.addEventListener("pointermove", (e) => {
         const [mx, my] = this.pos(e), dr = this.drag;
         this.mouse = [mx, my];
         if (this.linkFrom >= 0) this.kick();
+        if (dr?.resize !== undefined) {
+          if (Math.hypot(mx - dr.mx, my - dr.my) > 2) dr.moved = true;
+          if (dr.moved) {
+            // the picture stays centred on its node, so the dragged corner sets half the side
+            const [x, y] = this.toScreen(this.sim.nodes[dr.resize]);
+            const side = 2 * Math.max(Math.abs(mx - x), Math.abs(my - y));
+            const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, side / dr.base));
+            this.sizes.set(this.data.nodes[dr.resize].id, Math.round(scale * 100) / 100);
+            this.order = null; this.kick();
+          }
+          return;
+        }
         if (dr) {
           if (Math.hypot(mx - dr.mx, my - dr.my) > 4) dr.moved = true;
           if (dr.moved) {
@@ -466,12 +531,19 @@
           }
           return;
         }
-        const i = this.pick(mx, my);
-        if (i !== this.hover) { this.hover = i; i >= 0 ? this.showTip(i, mx, my) : this.hideTip(); cv.style.cursor = i >= 0 ? "pointer" : "grab"; this.kick(); }
-        else if (i >= 0) this.moveTip(mx, my);
+        const c = this.linkFrom < 0 && !this.pathMode ? this.corner(mx, my) : null;
+        const i = c ? c.i : this.pick(mx, my);
+        if (i !== this.hover) { this.hover = i; i >= 0 && !c ? this.showTip(i, mx, my) : this.hideTip(); this.kick(); }
+        else if (i >= 0 && !c) this.moveTip(mx, my);
+        if (c) this.hideTip();
+        cv.style.cursor = c ? (c.sx === c.sy ? "nwse-resize" : "nesw-resize") : i >= 0 ? "pointer" : "grab";
       });
       cv.addEventListener("pointerup", () => {
         const dr = this.drag; this.drag = null;
+        if (dr?.resize !== undefined) {
+          if (dr.moved) { const id = this.data.nodes[dr.resize].id; this.h.resized?.(id, this.sizes.get(id)); }
+          this.kick(); return;
+        }
         if (dr && !dr.moved && dr.i >= 0) this.clicked(dr.i, { shiftKey: dr.shift });
         else if (dr && !dr.moved && this.linkFrom >= 0) { this.linkFrom = -1; this.kick(); this.h.link?.(null, null); }
       });

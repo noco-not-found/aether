@@ -430,8 +430,8 @@ new ResizeObserver(() => { if (state.view === "grid" && state.items.length) rela
 // Settings that change which links exist are sent to the server (and reload the graph); the rest are
 // applied to the canvas instantly. Everything is remembered, and can be saved under a name as a preset.
 const GRAPH_DEFAULTS = { k: 4, z: 3, visual: 0.5, simOn: true, tagOn: true, manOn: true, linkTags: null,
-  size: "degree", color: "topic", labels: "auto", thumbs: "zoom", edgeAlpha: 1, hops: 1 };
-const LOOK_KEYS = ["size", "color", "labels", "thumbs", "edgeAlpha"];
+  size: "degree", color: "topic", labels: "auto", thumbs: "zoom", edgeAlpha: 1, imgSize: 1, hops: 1 };
+const LOOK_KEYS = ["size", "color", "labels", "thumbs", "edgeAlpha", "imgSize"];
 state.graph = (() => { try { return { ...GRAPH_DEFAULTS, ...JSON.parse(store.get("aether.graph") || "{}") }; } catch { return { ...GRAPH_DEFAULTS }; } })();
 state.gData = null; state.gPath = { state: "off" };
 
@@ -460,7 +460,7 @@ const gReload = () => { clearTimeout(gDebounce); gDebounce = setTimeout(loadGrap
 
 function markCustom() { $("gPreset").value = ""; $("gPresetDel").disabled = true; }
 function changed(reload) { saveGraph(); markCustom(); if (reload) gReload(); else applyLook(); }
-function lookOpts() { const g = state.graph; return { size: g.size, color: g.color, labels: g.labels, thumbs: g.thumbs, edgeAlpha: g.edgeAlpha, simOn: g.simOn, tagOn: g.tagOn, manOn: g.manOn }; }
+function lookOpts() { const g = state.graph; return { size: g.size, color: g.color, labels: g.labels, thumbs: g.thumbs, edgeAlpha: g.edgeAlpha, imgSize: g.imgSize ?? 1, simOn: g.simOn, tagOn: g.tagOn, manOn: g.manOn }; }
 function applyLook() { gv?.setOpts(lookOpts()); renderLegend(); }
 
 function syncGraphControls() {
@@ -469,6 +469,7 @@ function syncGraphControls() {
   $("gK").value = g.k; $("gKv").textContent = g.k; $("gZ").value = g.z; $("gMix").value = g.visual;
   $("gSize").value = g.size; $("gColor").value = g.color; $("gLabels").value = g.labels; $("gThumbs").value = g.thumbs;
   $("gEdge").value = g.edgeAlpha; $("gHops").value = String(g.hops);
+  $("gImg").value = g.imgSize ?? 1; $("gImgV").textContent = fmtScale(g.imgSize ?? 1);
 }
 
 // --- links
@@ -497,6 +498,20 @@ function renderTagList() {
 for (const [id, key] of [["gSize", "size"], ["gColor", "color"], ["gLabels", "labels"], ["gThumbs", "thumbs"]])
   $(id).onchange = (e) => { state.graph[key] = e.target.value; changed(false); };
 $("gEdge").oninput = (e) => { state.graph.edgeAlpha = Number(e.target.value); changed(false); };
+$("gImg").oninput = (e) => { state.graph.imgSize = Number(e.target.value); $("gImgV").textContent = fmtScale(state.graph.imgSize); changed(false); };
+function fmtScale(v) { return (Math.round(v * 10) / 10) + "\u00d7"; }
+
+// pictures you resized by dragging a corner: {item id: scale}, remembered in this window
+const PIC_SIZES_KEY = "aether.graph.sizes";
+function picSizes() { try { return JSON.parse(store.get(PIC_SIZES_KEY) || "{}"); } catch { return {}; } }
+function savePicSize(id, scale) {
+  const s = picSizes();
+  if (scale == null) delete s[id]; else s[id] = scale;
+  store.set(PIC_SIZES_KEY, JSON.stringify(s));
+  $("gSizesReset").hidden = !Object.keys(s).length;
+}
+$("gSizesReset").hidden = !Object.keys(picSizes()).length;
+$("gSizesReset").onclick = () => { store.set(PIC_SIZES_KEY, "{}"); gv?.setSizes({}); $("gSizesReset").hidden = true; };
 $("gLookReset").onclick = () => { for (const k of LOOK_KEYS) state.graph[k] = GRAPH_DEFAULTS[k]; syncGraphControls(); changed(false); };
 
 // --- focus, highlight, path
@@ -583,11 +598,13 @@ function nodeMenu(id, cx, cy) {
     <button data-act="link">Link to\u2026</button>
     ${arrows ? `<button data-act="lineage">Highlight lineage <span class="muted">${a.inn} in \u00b7 ${a.out} out</span></button>` : ""}
     ${gv.isPinned(id) ? '<button data-act="unpin">Unpin</button>' : ""}
+    ${gv.hasSize(id) ? '<button data-act="unsize">Reset picture size</button>' : ""}
     <button data-act="delete" class="bad">Delete</button>`, cx, cy, (act) => {
     if (act === "expand") openDetail(id);
     else if (act === "link") { gv.startLink(id); state.linking = n.title; state.gPath = { state: "off" }; renderGStatus(); }
     else if (act === "lineage") showLineage({ node: id }, `Lineage of \u201c${n.title}\u201d`);
     else if (act === "unpin") gv.unpin(id);
+    else if (act === "unsize") gv.resetSize(id);
     else if (act === "delete") deleteLater(id, n.title);
   });
 }
@@ -743,10 +760,12 @@ async function loadGraph() {
     menu: (id, x, y) => nodeMenu(id, x, y),
     link: (src, dst) => makeLink(src, dst),
     linkMenu: (info, x, y) => linkMenu(info, x, y),
+    resized: (id, scale) => savePicSize(id, scale),
     tip: (n, links) => `${n.thumb ? `<img src="${esc(n.thumb)}" alt="">` : ""}<b>${esc(n.title)}</b>
       <span class="muted small">${esc(n.source)} \u00b7 ${links} link${links === 1 ? "" : "s"}${n.cluster !== null ? " \u00b7 " + esc(topicName(n.cluster)) : ""}</span>`,
   });
   gv.setOpts(lookOpts());
+  gv.setSizes(picSizes());
   gv.setData(g);
   gv.setOpen(state.openId);
   state.linking = null;
