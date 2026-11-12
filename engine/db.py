@@ -5,7 +5,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -105,6 +105,16 @@ CREATE TABLE IF NOT EXISTS links (
   CHECK (src <> dst)
 );
 CREATE INDEX IF NOT EXISTS idx_links_dst ON links(dst);
+-- Automatic links you deleted in the graph (similarity or shared-tag), so they stay gone.
+-- a < b (these links have no direction); tag = '' for similarity links.
+CREATE TABLE IF NOT EXISTS hidden_links (
+  a          INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  b          INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('sim','tag')),
+  tag        TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (a, b, kind, tag)
+);
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY, value TEXT NOT NULL
 );

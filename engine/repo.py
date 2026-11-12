@@ -278,6 +278,44 @@ def remove_link(c: sqlite3.Connection, src: int, dst: int) -> bool:
     return c.execute("DELETE FROM links WHERE src=? AND dst=?", (src, dst)).rowcount == 1
 
 
+def _pair(a: int, b: int) -> tuple[int, int]:
+    return (a, b) if a < b else (b, a)
+
+
+def remove_links(c: sqlite3.Connection, links: list[dict]) -> dict:
+    """Deletes your arrows ('man': src -> dst) and hides automatic links ('sim', 'tag' + tag) for good."""
+    deleted = hidden = 0
+    t = now()
+    for l in links:
+        if l["kind"] == "man":
+            deleted += c.execute("DELETE FROM links WHERE src=? AND dst=?", (l["src"], l["dst"])).rowcount
+        else:
+            a, b = _pair(l["src"], l["dst"])
+            hidden += c.execute("INSERT OR IGNORE INTO hidden_links(a, b, kind, tag, created_at) "
+                                "SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM items WHERE id IN (?,?)) = 2",
+                                (a, b, l["kind"], (l.get("tag") or "") if l["kind"] == "tag" else "", t, a, b)).rowcount
+    return {"deleted": deleted, "hidden": hidden}
+
+
+def restore_links(c: sqlite3.Connection, links: list[dict] | None) -> int:
+    """Un-hides automatic links (all of them when links is None) and re-creates arrows given as 'man'."""
+    if links is None:
+        return c.execute("DELETE FROM hidden_links").rowcount
+    n = 0
+    for l in links:
+        if l["kind"] == "man":
+            n += bool(add_link(c, l["src"], l["dst"]))
+        else:
+            a, b = _pair(l["src"], l["dst"])
+            n += c.execute("DELETE FROM hidden_links WHERE a=? AND b=? AND kind=? AND tag=?",
+                           (a, b, l["kind"], (l.get("tag") or "") if l["kind"] == "tag" else "")).rowcount
+    return n
+
+
+def hidden_count(c: sqlite3.Connection) -> int:
+    return c.execute("SELECT COUNT(*) FROM hidden_links").fetchone()[0]
+
+
 def item_links(c: sqlite3.Connection, item_id: int) -> dict:
     def rows(sql):
         return [{"id": r["id"], "title": r["title"] or r["original_url"]} for r in c.execute(sql, (item_id,))]

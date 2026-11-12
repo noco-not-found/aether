@@ -275,3 +275,30 @@ def test_app_endpoints_outside_the_packaged_app(client):
     assert client.post("/api/app", json={"start_at_login": True}).status_code == 409
     assert client.post("/api/app/quit").status_code == 409
     assert client.get("/api/health").json()["app"] == "aether"
+
+
+def test_graph_links_can_be_selected_and_deleted_of_every_kind(client):
+    """Arrows are deleted; similarity / tag links are hidden for good (until restored)."""
+    ids = [capture(client, url=f"https://e.com/{i}", title=f"T{i}", tags=["pair"] if i < 2 else []).json()["id"] for i in range(3)]
+    a, b, c3 = ids
+    client.post("/api/links", json={"src": a, "dst": c3})
+    g = client.get("/api/graph").json()
+    ix = {n["id"]: i for i, n in enumerate(g["nodes"])}
+    assert [ix[a], ix[b], "pair"] in g["tagged"] or [ix[b], ix[a], "pair"] in g["tagged"]
+    r = client.post("/api/links/remove", json={"links": [
+        {"kind": "man", "src": a, "dst": c3}, {"kind": "tag", "src": b, "dst": a, "tag": "pair"}]}).json()
+    assert r == {"deleted": 1, "hidden": 1}
+    g = client.get("/api/graph").json()
+    assert g["manual"] == [] and g["tagged"] == []
+    assert client.get("/api/links/hidden").json()["count"] == 1
+    # the tag itself stays, and the link survives other changes until restored
+    assert "pair" in {t["name"] for t in client.get(f"/api/items/{a}").json()["tags"]}
+    # undo brings both back
+    assert client.post("/api/links/restore", json={"links": [
+        {"kind": "man", "src": a, "dst": c3}, {"kind": "tag", "src": a, "dst": b, "tag": "pair"}]}).json()["restored"] == 2
+    g = client.get("/api/graph").json()
+    assert len(g["manual"]) == 1 and len(g["tagged"]) == 1
+    client.post("/api/links/remove", json={"links": [{"kind": "tag", "src": a, "dst": b, "tag": "pair"}]})
+    assert client.post("/api/links/restore", json={"all": True}).json()["restored"] == 1
+    assert client.get("/api/links/hidden").json()["count"] == 0
+    assert client.post("/api/links/remove", json={"links": [{"kind": "bogus", "src": a, "dst": b}]}).status_code == 422

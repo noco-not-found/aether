@@ -7,6 +7,7 @@ Three kinds of link:
   * tag: items you gave the same tag by hand (or accepted), for tags worn by a handful of items.
     Broad tags ("recipes" on 200 items) would turn the graph into a hairball, so they are skipped;
   * manual: one-way arrows you drew yourself (always shown when both ends are on screen).
+Automatic links you deleted (table hidden_links) are left out.
 """
 from __future__ import annotations
 
@@ -85,6 +86,20 @@ def build(c, cards: list[dict], total: int, sem, *, k: int, visual: float, use_t
             for a, b, s in similarity_edges(X[[m[1] for m in mine]], k, z):
                 sim.append([int(node_ix[a]), int(node_ix[b]), round(s, 3)])
 
+    ids = [it["id"] for it in cards]
+    hidden: set[tuple] = set()
+    if cards:
+        for r in c.execute(f"SELECT a, b, kind, tag FROM hidden_links WHERE a IN ({ph}) AND b IN ({ph})", ids + ids):
+            hidden.add((index[r["a"]], index[r["b"]], r["kind"], r["tag"]))
+
+    def gone(x: int, y: int, kind: str, tag: str = "") -> bool:
+        if not hidden:
+            return False
+        a, b = (x, y) if cards[x]["id"] < cards[y]["id"] else (y, x)
+        return (a, b, kind, tag) in hidden
+
+    sim = [e for e in sim if not gone(e[0], e[1], "sim")]
+
     tagged: list[list] = []
     tag_names: list[dict] = []
     if cards:
@@ -97,11 +112,11 @@ def build(c, cards: list[dict], total: int, sem, *, k: int, visual: float, use_t
                            key=lambda t: (-t["count"], t["name"]))
         if use_tags:
             allowed = {t.lower() for t in link_tags} if link_tags else None
-            tagged = [[a, b, name] for a, b, name in tag_edges(groups) if allowed is None or name in allowed]
+            tagged = [[a, b, name] for a, b, name in tag_edges(groups)
+                      if (allowed is None or name in allowed) and not gone(a, b, "tag", name)]
 
     manual: list[list] = []
     if cards:
-        ids = [it["id"] for it in cards]
         manual = [[index[r["src"]], index[r["dst"]]] for r in c.execute(
             f"SELECT src, dst FROM links WHERE src IN ({ph}) AND dst IN ({ph})", ids + ids)]
 

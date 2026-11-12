@@ -92,6 +92,18 @@ class LinkBody(BaseModel):
     dst: int
 
 
+class AnyLink(BaseModel):
+    kind: Literal["man", "sim", "tag"]
+    src: int
+    dst: int
+    tag: Optional[str] = None
+
+
+class LinkBatch(BaseModel):
+    links: list[AnyLink] = Field(default_factory=list, max_length=5000)
+    all: bool = False
+
+
 class BulkOp(BaseModel):
     ids: list[int]
     add_tags: list[str] = Field(default_factory=list)
@@ -386,6 +398,23 @@ def create_app(root: Optional[Path] = None, embedder=None, background_mode: bool
         if made is None:
             raise HTTPException(status_code=404, detail="not found")
         return {"ok": True, "created": made}
+
+    @api.post("/links/remove")
+    def remove_links(body: LinkBatch):
+        """Delete any links picked in the graph: arrows are deleted, automatic links are hidden for good."""
+        with db.tx() as c:
+            return repo.remove_links(c, [l.model_dump() for l in body.links])
+
+    @api.post("/links/restore")
+    def restore_links(body: LinkBatch):
+        """Undo for /links/remove, or {"all": true} to bring back every hidden automatic link."""
+        with db.tx() as c:
+            return {"restored": repo.restore_links(c, None if body.all else [l.model_dump() for l in body.links])}
+
+    @api.get("/links/hidden")
+    def hidden_links():
+        with db.tx() as c:
+            return {"count": repo.hidden_count(c)}
 
     @api.delete("/links")
     def remove_link(src: int, dst: int):

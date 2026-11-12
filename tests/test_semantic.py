@@ -294,6 +294,17 @@ def test_graph_links_similar_items_and_shared_tags(client):
     few = client.get("/api/graph", params={"k": 1, "visual": 1}).json()["similar"]
     assert len(few) <= len(g["similar"])
 
+    # a similarity link you delete stays gone (either direction), until restored
+    x, y, _ = g["similar"][0]
+    src, dst = g["nodes"][y]["id"], g["nodes"][x]["id"]
+    assert client.post("/api/links/remove", json={"links": [{"kind": "sim", "src": src, "dst": dst}]}).json()["hidden"] == 1
+    pair = {src, dst}
+    after = client.get("/api/graph", params={"k": 3, "visual": 1}).json()
+    assert all({after["nodes"][a]["id"], after["nodes"][b]["id"]} != pair for a, b, _ in after["similar"])
+    client.post("/api/links/restore", json={"all": True})
+    again = client.get("/api/graph", params={"k": 3, "visual": 1}).json()
+    assert any({again["nodes"][a]["id"], again["nodes"][b]["id"]} == pair for a, b, _ in again["similar"])
+
 
 def test_graph_without_models_still_shows_tag_links(tmp_path):
     app = create_app(tmp_path)

@@ -544,6 +544,8 @@ $("gPath").onclick = () => { if (state.gPath.state === "off") gv?.startPath(); e
 
 function renderGStatus() {
   const box = $("gStatus"), P = state.gPath, parts = [];
+  if (state.linkSel) parts.push(`<span class="chip linksel">${state.linkSel} link${state.linkSel === 1 ? "" : "s"} selected
+    <button data-gsel-del class="mini">Delete</button> <button data-gsel-clear aria-label="Clear link selection">\u00d7</button></span>`);
   const fid = gv?.focusedId();
   $("gFocusClear").disabled = fid == null;
   if (fid != null) {
@@ -568,6 +570,8 @@ $("gStatus").addEventListener("click", (e) => {
   if (e.target.closest("[data-gfocus-clear]")) $("gFocusClear").click();
   else if (e.target.closest("[data-gpath-clear]")) gv?.clearPath();
   else if (e.target.closest("[data-glink-clear]")) cancelLink();
+  else if (e.target.closest("[data-gsel-del]")) deleteLinks(gv?.selectedLinks() || []);
+  else if (e.target.closest("[data-gsel-clear]")) gv?.clearLinkSel();
   else if (e.target.closest("[data-glineage-clear]")) clearLineage();
 });
 
@@ -610,18 +614,45 @@ function nodeMenu(id, cx, cy) {
 }
 
 function linkMenu(l, cx, cy) {
-  if (l.kind === "man") {
-    openMenu(`<div class="gctx-title">${esc(l.from)} \u2192 ${esc(l.to)}</div>
-      <button data-act="lineage">Highlight lineage</button>
-      <button data-act="unlink" class="bad">Delete link</button>`, cx, cy, (act) => {
-      if (act === "lineage") showLineage({ src: l.src, dst: l.dst }, `Lineage through \u201c${l.from}\u201d \u2192 \u201c${l.to}\u201d`);
-      else removeLink(l.src, l.dst);
-    });
-  } else {
-    const why = l.kind === "tag" ? `Both tagged \u201c${esc(l.tag || "")}\u201d.` : `Similar items (match ${Math.round(l.w * 100)}%).`;
-    openMenu(`<div class="gctx-title">Automatic link</div><p class="gctx-note">${why} Change these from the Links menu. Only your own arrows can be deleted.</p>`, cx, cy, () => {});
-  }
+  const n = gv.selLinks.size, inSel = n > 1 && gv.isSelected(l);
+  const title = l.kind === "man" ? `${esc(l.from)} \u2192 ${esc(l.to)}`
+    : l.kind === "tag" ? `Both tagged \u201c${esc(l.tag || "")}\u201d` : `Similar (match ${Math.round(l.w * 100)}%)`;
+  const note = l.kind === "man" ? "" : `<p class="gctx-note">Automatic link. Deleting it hides it for good; bring it back from Links \u2192 Restore all.</p>`;
+  openMenu(`<div class="gctx-title">${title}</div>${note}
+    ${l.kind === "man" ? '<button data-act="lineage">Highlight lineage</button>' : ""}
+    <button data-act="select">${gv.isSelected(l) ? "Unselect" : "Add to selection"}</button>
+    ${inSel ? `<button data-act="delsel" class="bad">Delete ${n} selected links</button>` : ""}
+    <button data-act="del" class="bad">Delete this link</button>`, cx, cy, (act) => {
+    if (act === "lineage") showLineage({ src: l.src, dst: l.dst }, `Lineage through \u201c${l.from}\u201d \u2192 \u201c${l.to}\u201d`);
+    else if (act === "select") { const k = gv.findLink(l); if (k) { gv.selLinks.has(k) ? gv.selLinks.delete(k) : gv.selLinks.add(k); gv.kick(); state.linkSel = gv.selLinks.size; renderGStatus(); } }
+    else if (act === "delsel") deleteLinks(gv.selectedLinks());
+    else deleteLinks([l]);
+  });
 }
+
+// --- delete any links (arrows are deleted, automatic ones hidden for good), with Undo
+async function deleteLinks(infos) {
+  if (!infos.length || !gv) return;
+  const body = infos.map(({ kind, src, dst, tag }) => ({ kind, src, dst, tag }));
+  try { await api("/links/remove", { method: "POST", body: { links: body } }); }
+  catch { toast("Couldn't delete those links."); return; }
+  gv.removeLinks(infos); updateGInfo(); refreshHidden();
+  if (state.lineage) clearLineage();
+  const touched = new Set(infos.flatMap((l) => [l.src, l.dst]));
+  if (state.openId && touched.has(state.openId)) openDetail(state.openId);
+  toast(infos.length === 1 ? "Link deleted." : `${infos.length} links deleted.`, { action: "Undo", ms: 8000, onAction: async () => {
+    try { await api("/links/restore", { method: "POST", body: { links: body } }); } catch { toast("Couldn't undo."); return; }
+    gv?.restoreLinks(infos); updateGInfo(); refreshHidden();
+    if (state.openId && touched.has(state.openId)) openDetail(state.openId);
+  } });
+}
+async function refreshHidden() {
+  try { const n = (await api("/links/hidden")).count; $("gHidN").textContent = n; $("gHidRestore").disabled = !n; } catch { /* older engine */ }
+}
+$("gHidRestore").onclick = async () => {
+  try { await api("/links/restore", { method: "POST", body: { all: true } }); } catch { toast("Couldn't restore links."); return; }
+  refreshHidden(); loadGraph(); toast("Deleted automatic links are back.");
+};
 
 function showLineage(spec, label) {
   const n = gv.setLineage(spec);
@@ -761,12 +792,15 @@ async function loadGraph() {
     link: (src, dst) => makeLink(src, dst),
     linkMenu: (info, x, y) => linkMenu(info, x, y),
     resized: (id, scale) => savePicSize(id, scale),
+    linkSel: (n) => { state.linkSel = n; renderGStatus(); },
     tip: (n, links) => `${n.thumb ? `<img src="${esc(n.thumb)}" alt="">` : ""}<b>${esc(n.title)}</b>
       <span class="muted small">${esc(n.source)} \u00b7 ${links} link${links === 1 ? "" : "s"}${n.cluster !== null ? " \u00b7 " + esc(topicName(n.cluster)) : ""}</span>`,
   });
   gv.setOpts(lookOpts());
   gv.setSizes(picSizes());
+  state.linkSel = 0;
   gv.setData(g);
+  refreshHidden();
   gv.setOpen(state.openId);
   state.linking = null;
   if (state.lineage) { gv.setLineage(null); state.lineage = null; }
@@ -922,11 +956,14 @@ function step(dir) {
 const typing = () => /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
-    if (closeMenu() || cancelLink() || clearLineage()) return;
+    if (closeMenu() || cancelLink() || clearLineage() || (state.view === "graph" && gv?.clearLinkSel())) return;
     if (document.activeElement === $("search")) $("search").blur();
     else if (!$("detail").hidden) closeDetail();
     else if (state.selected.size) $("selclear").click();
   } else if (e.key === "/" && !typing()) { e.preventDefault(); $("search").focus(); }
+  else if ((e.key === "Delete" || e.key === "Backspace") && !typing() && state.view === "graph" && gv?.selLinks.size) {
+    e.preventDefault(); deleteLinks(gv.selectedLinks());
+  }
   else if ((e.key === "t" || e.key === "T") && !typing() && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); cycleTheme(); }
   else if ((e.key === "r" || e.key === "R") && !typing() && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); reload(); }
   else if ((e.key === "g" || e.key === "G" || e.key === "v" || e.key === "V") && !typing() && !e.ctrlKey && !e.metaKey && !e.altKey) {

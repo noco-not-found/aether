@@ -8,6 +8,7 @@
            double-click / right-click a node = its menu (handlers.menu)
            drag a picture's corner = resize that picture (handlers.resized(id, scale) to remember it)
            right-click a link = the link's menu (handlers.linkMenu)
+           click a link = select it, Shift/Ctrl+click = add or remove it (handlers.linkSel(count))
            shift-click = focus on its neighbourhood
    Link mode (startLink): the source node shakes; clicking another node calls handlers.link(src, dst),
    clicking the same node or the background calls handlers.link(null) (cancelled).
@@ -39,6 +40,8 @@
       this.linkFrom = -1; this.mouse = null; this.clickT = 0; this.lineageSpec = null; this.lineage = null;
       this.goneIds = new Set(); this.gone = new Set();
       this.sizes = new Map();          // item id -> its own picture scale (dragged by the corner)
+      this.selLinks = new Set();       // selected link objects (from sim.links)
+      this.hoverLink = null;
       this.rects = [];                 // pictures drawn last frame, in draw order: [i, x, y, side]
       this.order = null;               // draw order: resized pictures last, so they sit on top
       this.imgs = new Map(); this.raf = 0; this.fitted = false; this.d = 1;
@@ -83,6 +86,8 @@
       const links = data.similar.map(([a, b, w]) => [a, b, w, "sim"]).concat(data.tagged.map(([a, b]) => [a, b, 0.5, "tag"]))
         .concat(data.manual.map(([a, b]) => [a, b, 0.8, "man"]));
       this.sim = root.AetherSim.create({ nodes: data.nodes, links });
+      data.tagged.forEach((t, k) => { this.sim.links[data.similar.length + k].tag = t[2]; });    // the tag a tag-link stands for
+      this.selLinks = new Set(); this.hoverLink = null;
       this.focus = keepFocus !== null && keepFocus !== undefined ? (this.byId.get(keepFocus) ?? -1) : -1;
       this.pathPick = []; this.path = null; this.hover = -1; this.fitted = false; this.hideTip();
       this.order = null;
@@ -119,6 +124,10 @@
       if (this.vis && this.hover >= 0 && !this.vis.has(this.hover)) this.hover = -1;
       this.path = this.pathPick.length === 2 ? this.findPath(this.pathPick[0], this.pathPick[1]) : null;
       this.lineage = this.lineageSpec ? this.computeLineage(this.lineageSpec) : null;
+      const drawn = new Set(this.vl);
+      const before = this.selLinks.size;
+      for (const l of [...this.selLinks]) if (!drawn.has(l)) this.selLinks.delete(l);
+      if (this.selLinks.size !== before) this.h.linkSel?.(this.selLinks.size);
       this.kick();
     }
     /** Everything upstream and downstream along your arrows: of a node, or through one arrow a -> b. */
@@ -201,6 +210,47 @@
       if (k < 0) return;
       this.sim.links.splice(k, 1); this.sim.nodes[a].deg--; this.sim.nodes[b].deg--;
       this.data.manual = this.data.manual.filter(([x, y]) => !(x === a && y === b));
+      this.rebuild();
+    }
+    // --- selecting and deleting links
+    linkInfo(l) {
+      const n = this.data.nodes;
+      return { kind: l.kind, src: n[l.a].id, dst: n[l.b].id, tag: l.tag || null, w: l.w, from: n[l.a].title, to: n[l.b].title };
+    }
+    findLink(info) {
+      const a = this.byId?.get(info.src), b = this.byId?.get(info.dst);
+      return this.sim?.links.find((l) => l.kind === info.kind && (l.tag || null) === (info.tag || null) &&
+        ((l.a === a && l.b === b) || (l.kind !== "man" && l.a === b && l.b === a)));
+    }
+    selectedLinks() { return [...this.selLinks].map((l) => this.linkInfo(l)); }
+    isSelected(info) { const l = this.findLink(info); return !!l && this.selLinks.has(l); }
+    clearLinkSel() { if (!this.selLinks.size) return false; this.selLinks.clear(); this.kick(); this.h.linkSel?.(0); return true; }
+    /** Take links out of the drawing (after the engine deleted them). No re-layout: nothing jumps. */
+    removeLinks(infos) {
+      const gone = new Set(infos.map((i) => this.findLink(i)).filter(Boolean));
+      if (!gone.size) return;
+      for (const l of gone) { this.sim.nodes[l.a].deg--; this.sim.nodes[l.b].deg--; this.selLinks.delete(l); }
+      const keep = this.sim.links.filter((l) => !gone.has(l));
+      this.sim.links.length = 0; this.sim.links.push(...keep);            // the sim holds this array: change it in place
+      const has = (kind, a, b, tag) => [...gone].some((l) => l.kind === kind && l.a === a && l.b === b && (tag === undefined || l.tag === tag));
+      this.data.similar = this.data.similar.filter(([a, b]) => !has("sim", a, b));
+      this.data.tagged = this.data.tagged.filter(([a, b, t]) => !has("tag", a, b, t));
+      this.data.manual = this.data.manual.filter(([a, b]) => !has("man", a, b));
+      this.h.linkSel?.(this.selLinks.size);
+      this.rebuild();
+    }
+    /** Put links back (undo). */
+    restoreLinks(infos) {
+      for (const i of infos) {
+        const a = this.byId.get(i.src), b = this.byId.get(i.dst);
+        if (a === undefined || b === undefined || this.findLink(i)) continue;
+        const l = { a, b, w: i.w ?? (i.kind === "man" ? 0.8 : 0.5), kind: i.kind };
+        if (i.tag) l.tag = i.tag;
+        this.sim.links.push(l); this.sim.nodes[a].deg++; this.sim.nodes[b].deg++;
+        if (i.kind === "sim") this.data.similar.push([a, b, l.w]);
+        else if (i.kind === "tag") this.data.tagged.push([a, b, i.tag]);
+        else this.data.manual.push([a, b]);
+      }
       this.rebuild();
     }
     arrows(id) { const i = this.byId?.get(id); return i === undefined ? { out: 0, inn: 0 } : { out: this.out[i].size, inn: this.inn[i].size }; }
@@ -289,6 +339,16 @@
         const onPath = pathing && this.path.edges.has(Math.min(l.a, l.b) + "-" + Math.max(l.a, l.b));
         const onLin = lin && lin.edges.has(l.a + ">" + l.b);
         const dimmed = (hv >= 0 && !lit) || (pathing && !onPath) || (lin && !onLin) || (this.hl && Math.min(this.fade(l.a), this.fade(l.b)) < 1);
+        const sel = this.selLinks.has(l), hot = l === this.hoverLink;
+        if (sel || hot) {        // selected: a thick outline behind the link, in the page colour, then the link in accent
+          ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.strokeStyle = this.col.face; ctx.lineWidth = sel ? 9 : 7;
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+          ctx.strokeStyle = sel ? this.col.accent : this.col.ink; ctx.lineWidth = sel ? 4 : 3;
+          if (l.kind === "tag" && !sel) ctx.setLineDash([5, 4]);
+          if (l.kind === "man") { this.arrow(x1, y1, x2, y2, nodes[l.b], sel ? this.col.accent : this.col.ink, 1, sel ? 4 : 3.2); continue; }
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
+          continue;
+        }
         if (l.kind === "man") { this.arrow(x1, y1, x2, y2, nodes[l.b], onLin || onPath ? this.col.accent : this.col.ink, dimmed ? 0.1 : Math.min(1, 0.95 * Math.max(ea, 0.6)), lit || onLin ? 3.2 : 2.4); continue; }
         ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
         if (onPath) { ctx.setLineDash([]); ctx.strokeStyle = this.col.accent; ctx.globalAlpha = 1; ctx.lineWidth = 3.5; }
@@ -501,7 +561,7 @@
           return;
         }
         const i = this.pick(mx, my);
-        this.drag = { i, mx, my, cx: this.cam.x, cy: this.cam.y, moved: false, shift: e.shiftKey };
+        this.drag = { i, mx, my, cx: this.cam.x, cy: this.cam.y, moved: false, shift: e.shiftKey, add: e.shiftKey || e.ctrlKey || e.metaKey };
       });
       cv.addEventListener("pointermove", (e) => {
         const [mx, my] = this.pos(e), dr = this.drag;
@@ -536,7 +596,9 @@
         if (i !== this.hover) { this.hover = i; i >= 0 && !c ? this.showTip(i, mx, my) : this.hideTip(); this.kick(); }
         else if (i >= 0 && !c) this.moveTip(mx, my);
         if (c) this.hideTip();
-        cv.style.cursor = c ? (c.sx === c.sy ? "nwse-resize" : "nesw-resize") : i >= 0 ? "pointer" : "grab";
+        const hl = c || i >= 0 || this.linkFrom >= 0 ? null : this.pickLink(mx, my);
+        if (hl !== this.hoverLink) { this.hoverLink = hl; this.kick(); }
+        cv.style.cursor = c ? (c.sx === c.sy ? "nwse-resize" : "nesw-resize") : i >= 0 || hl ? "pointer" : "grab";
       });
       cv.addEventListener("pointerup", () => {
         const dr = this.drag; this.drag = null;
@@ -546,9 +608,18 @@
         }
         if (dr && !dr.moved && dr.i >= 0) this.clicked(dr.i, { shiftKey: dr.shift });
         else if (dr && !dr.moved && this.linkFrom >= 0) { this.linkFrom = -1; this.kick(); this.h.link?.(null, null); }
+        else if (dr && !dr.moved && !this.pathMode) {          // a click on the background: links
+          const l = this.pickLink(dr.mx, dr.my);
+          if (l) {
+            if (dr.add) this.selLinks.has(l) ? this.selLinks.delete(l) : this.selLinks.add(l);
+            else if (this.selLinks.size === 1 && this.selLinks.has(l)) this.selLinks.clear();
+            else { this.selLinks.clear(); this.selLinks.add(l); }
+          } else if (!dr.add) this.selLinks.clear();
+          this.h.linkSel?.(this.selLinks.size); this.kick();
+        }
       });
       cv.addEventListener("pointercancel", () => { this.drag = null; });
-      cv.addEventListener("pointerleave", () => { if (!this.drag) { this.hover = -1; this.hideTip(); this.kick(); } });
+      cv.addEventListener("pointerleave", () => { if (!this.drag) { this.hover = -1; this.hoverLink = null; this.hideTip(); this.kick(); } });
       cv.addEventListener("dblclick", (e) => {
         clearTimeout(this.clickT);
         const [mx, my] = this.pos(e), i = this.pick(mx, my);
@@ -563,10 +634,7 @@
         const l = this.pickLink(mx, my);
         if (!l) return;
         e.preventDefault();
-        const id = (k) => this.data.nodes[k].id;
-        const tag = l.kind === "tag" ? this.data.tagged.find(([a, b]) => a === l.a && b === l.b)?.[2] : null;
-        this.h.linkMenu?.({ kind: l.kind, src: id(l.a), dst: id(l.b), w: l.w, tag,
-          from: this.data.nodes[l.a].title, to: this.data.nodes[l.b].title }, e.clientX, e.clientY);
+        this.h.linkMenu?.(this.linkInfo(l), e.clientX, e.clientY);
       });
     }
 
